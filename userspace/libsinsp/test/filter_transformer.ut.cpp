@@ -24,6 +24,7 @@ limitations under the License.
 #include <libsinsp/sinsp_filtercheck_multivalue_transformer.h>
 #include <libsinsp/sinsp_filtercheck_rawstring.h>
 #include <sinsp_with_test_input.h>
+#include <libsinsp/sinsp_filtercheck_thread.h>
 
 static std::set<ppm_param_type> all_param_types() {
 	std::set<ppm_param_type> ret;
@@ -701,3 +702,62 @@ TEST(multivalue_transformer_concat, result_type) {
 	EXPECT_EQ(result.type, PT_CHARBUF);
 	EXPECT_FALSE(result.is_list);
 }
+
+TEST(thread_memory, vmsize_vmrss_bytes_no_overflow) {
+    sinsp inspector;
+
+    auto tinfo = inspector.get_threadinfo_factory().create();
+
+    tinfo->m_vmsize_kb = 5ULL * 1024 * 1024;
+    tinfo->m_vmrss_kb = 3ULL * 1024 * 1024;
+
+    const uint64_t expected_vmsize = 5ULL * 1024 * 1024 * 1024;
+    const uint64_t expected_vmrss = 3ULL * 1024 * 1024 * 1024;
+
+    tinfo->m_tid = 100;
+    tinfo->m_pid = 100;
+
+    sinsp_evt evt;
+    evt.set_tinfo(tinfo.get());
+
+    // VMSIZE
+    {
+        sinsp_filter_check_thread fc;
+        fc.parse_field_name("thread.vmsize.b", false, false);
+
+        std::vector<extract_value_t> values;
+        fc.extract(&evt, values);
+
+        ASSERT_FALSE(values.empty());
+        ASSERT_EQ(*reinterpret_cast<uint64_t*>(values[0].ptr), expected_vmsize);
+    }
+
+    // VMRSS
+    {
+        sinsp_filter_check_thread fc;
+        fc.parse_field_name("thread.vmrss.b", false, false);
+
+        std::vector<extract_value_t> values;
+        fc.extract(&evt, values);
+
+        ASSERT_FALSE(values.empty());
+		ASSERT_NE(values[0].ptr, nullptr);
+        ASSERT_EQ(*reinterpret_cast<uint64_t*>(values[0].ptr), expected_vmrss);
+    }
+
+    // Non-main thread → expect 0
+    {
+        tinfo->m_tid = 100;
+        tinfo->m_pid = 200;
+
+        sinsp_filter_check_thread fc;
+        fc.parse_field_name("thread.vmrss.b", false, false);
+
+        std::vector<extract_value_t> values;
+        fc.extract(&evt, values);
+
+        ASSERT_FALSE(values.empty());
+        ASSERT_EQ(*reinterpret_cast<uint64_t*>(values[0].ptr), 0);
+    }
+}
+
